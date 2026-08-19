@@ -30,8 +30,8 @@ public static class QuestViewPatches
     public static void RefreshDetails(QuestView __instance)
     {
         Quest? quest = __instance.SelectedQuest;
-        // 受注可能クエスト（プレハブ）も詳細を表示できるようにする
-        bool interactable = quest != null && (quest.Active || quest.Complete || CanAccept(quest));
+        // 未受注クエストでは詳細UIを表示しても、納品などの操作系は無効のままにする
+        bool interactable = quest != null && (quest.Active || quest.Complete);
         if (DetailsField?.GetValue(__instance) is QuestViewDetails details)
         {
             AccessTools.Field(typeof(QuestViewDetails), "interactable")?.SetValue(details, interactable);
@@ -143,6 +143,17 @@ public static class QuestViewPatches
         bool alreadyActive = QuestManager.Instance.ActiveQuests.Any(q => q != null && q.ID == quest.ID);
         return !alreadyActive && !quest.Complete && quest.MeetsPrerequisit();
     }
+
+    internal static Quest? GetSelectedActiveQuest(Quest? selectedQuest)
+    {
+        if (selectedQuest == null || QuestManager.Instance == null)
+        {
+            return null;
+        }
+
+        return QuestManager.Instance.ActiveQuests
+            .FirstOrDefault(q => q != null && ReferenceEquals(q, selectedQuest));
+    }
 }
 
 internal class QuestBoardPanel : MonoBehaviour
@@ -217,7 +228,7 @@ internal class QuestBoardPanel : MonoBehaviour
 
         Quest? quest = _view.SelectedQuest;
         int questId = quest?.ID ?? -1;
-        bool questActive = quest?.Active ?? false;
+        bool questActive = QuestViewPatches.GetSelectedActiveQuest(quest) != null;
         bool questComplete = quest?.Complete ?? false;
         bool tasksFinished = quest?.AreTasksFinished() ?? false;
         bool canAccept = QuestViewPatches.CanAccept(quest);
@@ -239,7 +250,7 @@ internal class QuestBoardPanel : MonoBehaviour
     {
         Quest? quest = _view != null ? _view.SelectedQuest : null;
         _lastQuestId = quest?.ID ?? -1;
-        _lastQuestActive = quest?.Active ?? false;
+        _lastQuestActive = QuestViewPatches.GetSelectedActiveQuest(quest) != null;
         _lastQuestComplete = quest?.Complete ?? false;
         _lastTasksFinished = quest?.AreTasksFinished() ?? false;
         _lastCanAccept = QuestViewPatches.CanAccept(quest);
@@ -425,10 +436,11 @@ internal class QuestBoardPanel : MonoBehaviour
             return;
         }
 
-        if (quest.Active)
+        Quest? activeQuest = QuestViewPatches.GetSelectedActiveQuest(quest);
+        if (activeQuest != null)
         {
             _completeMode = true;
-            bool tasksFinished = quest.AreTasksFinished();
+            bool tasksFinished = activeQuest.AreTasksFinished();
             bool inRaid = IsInRaid();
             bool interactable = tasksFinished && !inRaid;
             string label;
@@ -499,23 +511,29 @@ internal class QuestBoardPanel : MonoBehaviour
 
         if (_completeMode)
         {
+            Quest? activeQuest = QuestViewPatches.GetSelectedActiveQuest(quest);
+            if (activeQuest == null)
+            {
+                return;
+            }
+
             if (IsInRaid())
             {
                 return;
             }
 
-            if (!quest.AreTasksFinished())
+            if (!activeQuest.AreTasksFinished())
             {
                 return;
             }
 
-            if (!quest.TryComplete())
+            if (!activeQuest.TryComplete())
             {
                 return;
             }
 
             PlaySfx("UI/mission_large");
-            ShowCompleteUi(quest);
+            ShowCompleteUi(activeQuest);
             RefreshButton();
         }
     }
