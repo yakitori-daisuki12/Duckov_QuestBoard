@@ -6,7 +6,14 @@ using ICSharpCode.Decompiler.TypeSystem;
 var path = @"D:\Steam\steamapps\common\Escape from Duckov\Duckov_Data\Managed\TeamSoda.Duckov.Core.dll";
 var d = new CSharpDecompiler(path, new DecompilerSettings { ThrowOnAssemblyResolveErrors = false });
 
-// QuestGiverView - full first 6000 chars to understand layout
-var gv = d.DecompileTypeAsString(new FullTypeName("Duckov.Quests.UI.QuestGiverView"));
-Console.WriteLine("=== QuestGiverView (first 6000) ===");
-Console.WriteLine(gv.Substring(0, Math.Min(6000, gv.Length)));
+var quest = d.DecompileTypeAsString(new FullTypeName("Duckov.Quests.Quest"));
+foreach (string key in new[] { "TryComplete()", "NotifyActivated", "onQuestStatusChanged", "AreTasksFinished()" })
+{
+    int idx = quest.IndexOf(key, StringComparison.Ordinal);
+    Console.WriteLine($"=== {key} @ {idx} ===");
+    if (idx >= 0)
+    {
+        int start = Math.Max(0, idx - 200);
+        Console.WriteLine(quest.Substring(start, Math.Min(1600, quest.Length - start)));
+    }
+}

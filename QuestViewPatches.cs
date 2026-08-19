@@ -30,7 +30,8 @@ public static class QuestViewPatches
     public static void RefreshDetails(QuestView __instance)
     {
         Quest? quest = __instance.SelectedQuest;
-        bool interactable = quest != null && (quest.Active || quest.Complete);
+        // 受注可能クエスト（プレハブ）も詳細を表示できるようにする
+        bool interactable = quest != null && (quest.Active || quest.Complete || CanAccept(quest));
         if (DetailsField?.GetValue(__instance) is QuestViewDetails details)
         {
             AccessTools.Field(typeof(QuestViewDetails), "interactable")?.SetValue(details, interactable);
@@ -46,34 +47,81 @@ public static class QuestViewPatches
         QuestBoardPanel.Refresh(__instance);
     }
 
+    // RefreshEntryList の末尾に受注可能クエストのエントリを追加する
+    // ShowingContent プロパティを汚染しないため RefreshEntryList をパッチする
+    private static readonly FieldInfo? QuestEntryField =
+        AccessTools.Field(typeof(QuestView), "questEntry");
+
+    private static readonly FieldInfo? QuestEntryParentField =
+        AccessTools.Field(typeof(QuestView), "questEntryParent");
+
+    private static readonly FieldInfo? EntryListPlaceHolderField =
+        AccessTools.Field(typeof(QuestView), "entryListPlaceHolder");
+
+    private static readonly MethodInfo? PoolGetMethod =
+        AccessTools.Method(typeof(QuestView).Assembly.GetType("Duckov.Utilities.PrefabPool`1")
+            ?.MakeGenericType(typeof(QuestEntry)) ?? typeof(object), "Get",
+            new[] { typeof(Transform) });
+
+    private static readonly FieldInfo? QuestEntryPoolField =
+        AccessTools.Field(typeof(QuestView), "_questEntryPool");
+
+    private static readonly MethodInfo? SetMenuMethod =
+        AccessTools.Method(typeof(QuestEntry), "SetMenu");
+
     [HarmonyPostfix]
-    [HarmonyPatch("get_ShowingContent")]
-    public static void ShowingContent(QuestView __instance, ref IList<Quest>? __result)
+    [HarmonyPatch("RefreshEntryList")]
+    public static void RefreshEntryList(QuestView __instance)
     {
         if (__instance.ShowingContentType != QuestView.ShowContent.Active)
         {
             return;
         }
 
-        var combined = new List<Quest>();
+        // すでに Active なクエスト ID セット
+        var activeIds = new HashSet<int>(
+            QuestManager.Instance?.ActiveQuests
+                .Where(q => q != null).Select(q => q.ID) ?? Enumerable.Empty<int>());
+
         QuestCollection? collection = GameplayDataSettings.QuestCollection;
-        if (collection != null)
+        if (collection == null) return;
+
+        // QuestEntryPool を取得
+        object? pool = QuestEntryPoolField?.GetValue(__instance);
+        if (pool == null) return;
+        Transform? parent = QuestEntryParentField?.GetValue(__instance) as Transform;
+        if (parent == null) return;
+
+        // Pool.Get(parent) を呼び出すメソッドを動的取得
+        MethodInfo? poolGet = pool.GetType().GetMethod("Get", new[] { typeof(Transform) });
+        if (poolGet == null) return;
+
+        MethodInfo? setupMethod = AccessTools.Method(typeof(QuestEntry), "Setup");
+        // SetMenu は internal void SetMenu(ISingleSelectionMenu<QuestEntry>)
+        MethodInfo? setMenuMethod = typeof(QuestEntry)
+            .GetMethod("SetMenu",
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Public);
+
+        bool addedAny = false;
+        foreach (Quest quest in collection)
         {
-            foreach (Quest quest in collection)
-            {
-                if (CanAccept(quest))
-                {
-                    combined.Add(quest);
-                }
-            }
+            if (!CanAccept(quest)) continue;
+            if (activeIds.Contains(quest.ID)) continue;
+
+            QuestEntry? entry = poolGet.Invoke(pool, new object[] { parent }) as QuestEntry;
+            if (entry == null) continue;
+            setMenuMethod?.Invoke(entry, new object[] { __instance });
+            setupMethod?.Invoke(entry, new object[] { quest });
+            entry.transform.SetAsLastSibling();
+            addedAny = true;
         }
 
-        if (__result != null)
+        if (addedAny && EntryListPlaceHolderField?.GetValue(__instance) is GameObject placeHolder)
         {
-            combined.AddRange(__result);
+            placeHolder.SetActive(false);
         }
-
-        __result = combined;
     }
 
     private static readonly MethodInfo? IsQuestAvaliableMethod =
@@ -121,8 +169,14 @@ internal class QuestBoardPanel : MonoBehaviour
     private Button? _button;
     private Image? _buttonImage;
     private TextMeshProUGUI? _buttonText;
+    private QuestCompletePanel? _completePanel;
     private bool _acceptMode;
     private bool _completeMode;
+    private int _lastQuestId = -1;
+    private bool _lastQuestActive;
+    private bool _lastQuestComplete;
+    private bool _lastTasksFinished;
+    private bool _lastCanAccept;
 
     public static void Attach(QuestView view)
     {
@@ -136,6 +190,7 @@ internal class QuestBoardPanel : MonoBehaviour
         {
             panel = view.gameObject.AddComponent<QuestBoardPanel>();
             panel._view = view;
+            panel.EnsureCompletePanel();
             panel.CreateButton();
         }
 
@@ -150,6 +205,44 @@ internal class QuestBoardPanel : MonoBehaviour
     private void Start()
     {
         AlignToDetailsPanel();
+        CaptureQuestState();
+    }
+
+    private void Update()
+    {
+        if (_view == null)
+        {
+            return;
+        }
+
+        Quest? quest = _view.SelectedQuest;
+        int questId = quest?.ID ?? -1;
+        bool questActive = quest?.Active ?? false;
+        bool questComplete = quest?.Complete ?? false;
+        bool tasksFinished = quest?.AreTasksFinished() ?? false;
+        bool canAccept = QuestViewPatches.CanAccept(quest);
+
+        if (questId == _lastQuestId &&
+            questActive == _lastQuestActive &&
+            questComplete == _lastQuestComplete &&
+            tasksFinished == _lastTasksFinished &&
+            canAccept == _lastCanAccept)
+        {
+            return;
+        }
+
+        RefreshButton();
+        CaptureQuestState();
+    }
+
+    private void CaptureQuestState()
+    {
+        Quest? quest = _view != null ? _view.SelectedQuest : null;
+        _lastQuestId = quest?.ID ?? -1;
+        _lastQuestActive = quest?.Active ?? false;
+        _lastQuestComplete = quest?.Complete ?? false;
+        _lastTasksFinished = quest?.AreTasksFinished() ?? false;
+        _lastCanAccept = QuestViewPatches.CanAccept(quest);
     }
 
     private void AlignToDetailsPanel()
@@ -251,6 +344,38 @@ internal class QuestBoardPanel : MonoBehaviour
         rect.sizeDelta        = new Vector2(0f, 80f);
     }
 
+    private void EnsureCompletePanel()
+    {
+        if (_completePanel != null)
+        {
+            return;
+        }
+
+        QuestCompletePanel? sourcePanel = null;
+        QuestGiverView? giver = QuestGiverView.Instance
+            ?? Resources.FindObjectsOfTypeAll<QuestGiverView>()
+                .FirstOrDefault(v => v != null && v.gameObject.scene.isLoaded);
+
+        if (giver != null && CompletePanelField != null)
+        {
+            sourcePanel = CompletePanelField.GetValue(giver) as QuestCompletePanel;
+        }
+
+        sourcePanel ??= Resources.FindObjectsOfTypeAll<QuestCompletePanel>()
+            .FirstOrDefault(p => p != null);
+
+        if (sourcePanel == null)
+        {
+            return;
+        }
+
+        Transform parent = _view.transform.parent != null ? _view.transform.parent : _view.transform;
+        GameObject clone = Instantiate(sourcePanel.gameObject, parent, false);
+        clone.name = "QuestBoard_CompletePanel";
+        clone.SetActive(true);
+        _completePanel = clone.GetComponent<QuestCompletePanel>();
+    }
+
     // 受注できた固定レイアウトを基準にしつつ、x方向だけ詳細パネル幅へ寄せる。
     private static Button? FindSourceInteractButton()
     {
@@ -287,6 +412,7 @@ internal class QuestBoardPanel : MonoBehaviour
         if (quest == null)
         {
             _button.gameObject.SetActive(false);
+            CaptureQuestState();
             return;
         }
 
@@ -295,6 +421,7 @@ internal class QuestBoardPanel : MonoBehaviour
         {
             _acceptMode = true;
             ShowButton(true, giver != null ? giver.BtnText_AcceptQuest : "Accept");
+            CaptureQuestState();
             return;
         }
 
@@ -319,10 +446,12 @@ internal class QuestBoardPanel : MonoBehaviour
             }
 
             ShowButton(interactable, label);
+            CaptureQuestState();
             return;
         }
 
         _button.gameObject.SetActive(false);
+        CaptureQuestState();
     }
 
     private void ShowButton(bool interactable, string label)
@@ -403,17 +532,9 @@ internal class QuestBoardPanel : MonoBehaviour
             ?.Invoke(null, new object[] { key });
     }
 
-    private static void ShowCompleteUi(Quest quest)
+    private void ShowCompleteUi(Quest quest)
     {
-        QuestGiverView? giver = QuestGiverView.Instance;
-        if (giver == null || CompletePanelField == null)
-        {
-            return;
-        }
-
-        if (CompletePanelField.GetValue(giver) is QuestCompletePanel panel)
-        {
-            panel.Show(quest).Forget();
-        }
+        EnsureCompletePanel();
+        _completePanel?.Show(quest).Forget();
     }
 }
