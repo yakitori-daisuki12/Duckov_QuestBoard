@@ -1,28 +1,40 @@
 # Duckov_QuestBoard
 
-This is a mod for **Escape from Duckov** (逃离鸭科夫).
-
-Accept and turn in quests from the existing quest list, without talking to NPCs.
-The accept / turn-in buttons are the game's own buttons.
-Turn-in is disabled during raids. Accepting quests still works in raids.
-
-Languages: English, 简体中文, 日本語.
-
-## 日本語
-
-『Escape from Duckov（逃离鸭科夫）』のmodです。
+『Escape from Duckov』のmodです。
 
 NPCに話しかけなくても、既存のクエスト一覧から受注と報告ができます。
-受注・報告ボタンはゲーム本体のものを使います。
 出撃中は報告できません。受注は出撃中も可能です。
 
-## 中文
+![Quest menu screenshot](docs/quest-menu.png)
 
-这是《逃离鸭科夫》（Escape from Duckov）的模组。
+## 機能
 
-无需与 NPC 对话，可在现有任务列表中接取和交付任务。
-接取 / 交付按钮使用游戏原有按钮。
-出击途中无法交付，接取仍然可用。
+- クエストメニューから直接受注できます
+- クエストメニューから完了済みクエストを報告できます
+- ボタンの見た目と文言はゲーム本体のNPC画面に寄せています
+- 出撃中は報告を無効化し、受注は可能なままにしています
+- 対応言語は日本語と英語です
+
+## 説明
+
+- `進行中` タブに受注可能クエストも表示されます
+- クエストを選ぶと、下部のボタンから受注または報告ができます
+- ボタンの文言と色は、NPC画面の挙動に合わせています
+
+## English
+
+This is a mod for **Escape from Duckov**.
+
+Accept and turn in quests from the existing quest list without talking to NPCs.
+Turn-in is disabled during raids, while accepting quests still works.
+
+### Features
+
+- Accept quests directly from the quest menu
+- Turn in finished quests directly from the quest menu
+- Reuse the game's own button look and text style
+- Keep turn-in disabled during raids while still allowing acceptance
+- Support Japanese and English
 
 ## Build
 
