@@ -26,6 +26,10 @@ public static class L
             [SystemLanguage.ChineseSimplified] = new Dictionary<string, string>
             {
                 [Keys.RaidTurnInBlocked] = "出击中无法交付"
+            },
+            [SystemLanguage.Korean] = new Dictionary<string, string>
+            {
+                [Keys.RaidTurnInBlocked] = "레이드 중에는 보고할 수 없습니다"
             }
         };
 
@@ -77,6 +81,7 @@ public static class L
         return language switch
         {
             SystemLanguage.Japanese => SystemLanguage.Japanese,
+            SystemLanguage.Korean => SystemLanguage.Korean,
             SystemLanguage.Chinese or SystemLanguage.ChineseSimplified or SystemLanguage.ChineseTraditional =>
                 SystemLanguage.ChineseSimplified,
             _ => SystemLanguage.English

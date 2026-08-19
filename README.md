@@ -13,7 +13,7 @@ NPCに話しかけなくても、既存のクエスト一覧から受注と報�
 - クエストメニューから完了済みクエストを報告できます
 - ボタンの見た目と文言はゲーム本体のNPC画面に寄せています
 - 出撃中は報告を無効化し、受注は可能なままにしています
-- 対応言語は日本語と英語です
+- 対応言語は日本語、英語、簡体字中国語、韓国語です
 
 ## 説明
 
@@ -34,7 +34,7 @@ Turn-in is disabled during raids, while accepting quests still works.
 - Turn in finished quests directly from the quest menu
 - Reuse the game's own button look and text style
 - Keep turn-in disabled during raids while still allowing acceptance
-- Support Japanese and English
+- Support Japanese, English, Simplified Chinese, and Korean
 
 ## Build
 
