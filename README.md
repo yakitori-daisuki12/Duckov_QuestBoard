@@ -3,6 +3,7 @@
 『Escape from Duckov』のmodです。
 
 NPCに話しかけなくても、既存のクエスト一覧から受注と報告ができます。
+
 出撃中は報告できません。受注は出撃中も可能です。
 
 ![Quest menu screenshot](docs/quest-menu.png)
