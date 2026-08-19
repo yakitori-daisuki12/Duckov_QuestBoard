@@ -99,6 +99,12 @@ public static class QuestViewPatches
 
 internal class QuestBoardPanel : MonoBehaviour
 {
+    private static readonly FieldInfo? DetailsField =
+        AccessTools.Field(typeof(QuestView), "details");
+
+    private static readonly FieldInfo? ContentFadeGroupField =
+        AccessTools.Field(typeof(QuestViewDetails), "contentFadeGroup");
+
     private static readonly FieldInfo? InteractButtonField =
         AccessTools.Field(typeof(QuestGiverView), "btn_Interact");
 
@@ -141,41 +147,111 @@ internal class QuestBoardPanel : MonoBehaviour
         view?.GetComponent<QuestBoardPanel>()?.RefreshButton();
     }
 
-    private void CreateButton()
+    private void Start()
     {
-        Button? original = FindSourceInteractButton();
-        if (original == null)
-        {
-            ModBehaviour.Log("QuestGiverView button not found.");
-            return;
-        }
-
-        GameObject clone = Object.Instantiate(original.gameObject, _view.transform, false);
-        clone.name = "QuestBoard_InteractButton";
-        clone.SetActive(false);
-
-        _button = clone.GetComponent<Button>();
-        if (_button == null)
-        {
-            ModBehaviour.Log("btn_Interact clone has no Button.");
-            return;
-        }
-
-        _button.onClick = new Button.ButtonClickedEvent();
-        _button.onClick.AddListener(OnClicked);
-        _buttonImage = clone.GetComponent<Image>();
-        _buttonText = clone.GetComponentInChildren<TextMeshProUGUI>(true);
-
-        RectTransform? rect = clone.GetComponent<RectTransform>();
-        if (rect != null)
-        {
-            rect.anchorMin = new Vector2(0.55f, 0.04f);
-            rect.anchorMax = new Vector2(0.96f, 0.12f);
-            rect.offsetMin = Vector2.zero;
-            rect.offsetMax = Vector2.zero;
-        }
+        AlignToDetailsPanel();
     }
 
+    private void AlignToDetailsPanel()
+    {
+        if (_button == null) return;
+        RectTransform? viewRect = _view?.GetComponent<RectTransform>();
+        if (viewRect == null) return;
+
+        RectTransform? alignRect = null;
+        if (DetailsField?.GetValue(_view) is QuestViewDetails details)
+        {
+            if (ContentFadeGroupField?.GetValue(details) is Component fade)
+                alignRect = fade.GetComponent<RectTransform>();
+            alignRect ??= details.GetComponent<RectTransform>();
+        }
+        if (alignRect == null) return;
+
+        Vector3[] corners = new Vector3[4];
+        alignRect.GetWorldCorners(corners);
+        // corners[0]=左下, corners[1]=左上, corners[2]=右上, corners[3]=右下
+        Vector2 localMin = viewRect.InverseTransformPoint(corners[0]); // 左下
+        Vector2 localMax = viewRect.InverseTransformPoint(corners[2]); // 右上
+        Rect area = viewRect.rect;
+        if (area.width < 1f || area.height < 1f) return;
+
+        float aMinX = Mathf.Clamp01((localMin.x - area.xMin) / area.width);
+        float aMaxX = Mathf.Clamp01((localMax.x - area.xMin) / area.width);
+        // details 幅そのままだと少し左にはみ出して見えるため、左端だけ内側に寄せる
+        aMinX = Mathf.Clamp01(aMinX + 0.05f);
+        if (aMaxX - aMinX < 0.05f) return;
+
+        RectTransform rect = _button.GetComponent<RectTransform>();
+        rect.anchorMin = new Vector2(aMinX, rect.anchorMin.y);
+        rect.anchorMax = new Vector2(aMaxX, rect.anchorMax.y);
+        rect.anchoredPosition = new Vector2(0f, rect.anchoredPosition.y);
+    }
+
+    private void CreateButton()
+    {
+        // クローンではなくゼロから作成（元の btn_Interact と重なってクリックを横取りされるのを防ぐ）
+        var go = new GameObject("QuestBoard_InteractButton",
+            typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Button));
+        go.transform.SetParent(_view.transform, false);
+        go.SetActive(false);
+
+        _button = go.GetComponent<Button>();
+        _buttonImage = go.GetComponent<Image>();
+
+        // NPC ボタンからビジュアルだけコピー
+        Button? original = FindSourceInteractButton();
+        if (original != null)
+        {
+            Image? srcImg = original.GetComponent<Image>();
+            if (srcImg != null)
+            {
+                _buttonImage.sprite = srcImg.sprite;
+                _buttonImage.type   = srcImg.type;
+                _buttonImage.color  = srcImg.color;
+            }
+            _button.transition  = original.transition;
+            _button.colors      = original.colors;
+            _button.spriteState = original.spriteState;
+
+            // テキストをゼロから追加してフォントだけコピー
+            TextMeshProUGUI? srcTmp = original.GetComponentInChildren<TextMeshProUGUI>(true);
+            var textGo = new GameObject("Text",
+                typeof(RectTransform), typeof(CanvasRenderer), typeof(TextMeshProUGUI));
+            textGo.transform.SetParent(go.transform, false);
+            var textRect = textGo.GetComponent<RectTransform>();
+            textRect.anchorMin = Vector2.zero;
+            textRect.anchorMax = Vector2.one;
+            textRect.offsetMin = Vector2.zero;
+            textRect.offsetMax = Vector2.zero;
+            _buttonText = textGo.GetComponent<TextMeshProUGUI>();
+            _buttonText.alignment = TMPro.TextAlignmentOptions.Center;
+            if (srcTmp != null)
+            {
+                _buttonText.font     = srcTmp.font;
+                _buttonText.fontSize = srcTmp.fontSize;
+                _buttonText.color    = srcTmp.color;
+            }
+        }
+        else
+        {
+            _buttonImage.color = new Color(0.25f, 0.6f, 0.3f, 1f);
+        }
+
+        _button.targetGraphic = _buttonImage;
+        _button.onClick.AddListener(OnClicked);
+
+        var le = go.AddComponent<LayoutElement>();
+        le.ignoreLayout = true;
+
+        var rect = go.GetComponent<RectTransform>();
+        rect.anchorMin        = new Vector2(0.42f, 0.08f);
+        rect.anchorMax        = new Vector2(0.97f, 0.08f);
+        rect.pivot            = new Vector2(0.5f, 0f);
+        rect.anchoredPosition = new Vector2(0f, 0f);
+        rect.sizeDelta        = new Vector2(0f, 80f);
+    }
+
+    // 受注できた固定レイアウトを基準にしつつ、x方向だけ詳細パネル幅へ寄せる。
     private static Button? FindSourceInteractButton()
     {
         QuestGiverView? giver = QuestGiverView.Instance;
