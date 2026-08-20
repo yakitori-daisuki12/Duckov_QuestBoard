@@ -1,4 +1,4 @@
-# Duckov_QuestBoard
+# Duckov_QuestsAnywhere
 
 『Escape from Duckov』のmodです。
 

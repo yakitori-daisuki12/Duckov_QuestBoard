@@ -427,3 +427,6 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Steam Workshop upload (local staging, not for git)
+workshop/
