@@ -441,10 +441,10 @@ internal class QuestBoardPanel : MonoBehaviour
         {
             _completeMode = true;
             bool tasksFinished = activeQuest.AreTasksFinished();
-            bool inRaid = IsInRaid();
-            bool interactable = tasksFinished && !inRaid;
+            bool blockedInRaid = ModConfig.BlocksTurnInDuringRaid();
+            bool interactable = tasksFinished && !blockedInRaid;
             string label;
-            if (tasksFinished && inRaid)
+            if (tasksFinished && blockedInRaid)
             {
                 label = L.Get(L.Keys.RaidTurnInBlocked);
             }
@@ -517,7 +517,7 @@ internal class QuestBoardPanel : MonoBehaviour
                 return;
             }
 
-            if (IsInRaid())
+            if (ModConfig.BlocksTurnInDuringRaid())
             {
                 return;
             }
@@ -536,11 +536,6 @@ internal class QuestBoardPanel : MonoBehaviour
             ShowCompleteUi(activeQuest);
             RefreshButton();
         }
-    }
-
-    private static bool IsInRaid()
-    {
-        return LevelManager.Instance != null && !LevelManager.Instance.IsBaseLevel;
     }
 
     private static void PlaySfx(string key)

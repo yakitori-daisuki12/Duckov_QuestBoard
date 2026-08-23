@@ -9,6 +9,7 @@
     </PropertyGroup>
     <ItemGroup>
         <Compile Include="ModBehaviour.cs" />
+        <Compile Include="ModConfig.cs" />
         <Compile Include="Localization.cs" />
         <Compile Include="QuestViewPatches.cs" />
     </ItemGroup>
@@ -28,6 +29,7 @@
             <ModFiles Include="$(TargetDir)QuestBoard.dll" />
             <ModFiles Include="$(TargetDir)QuestBoard.pdb" />
             <ModFiles Include="info.ini" />
+            <ModFiles Include="Settings.default.json" />
         </ItemGroup>
         <Copy SourceFiles="@(ModFiles)"
               DestinationFolder="$(DuckovPath)\Duckov_Data\Mods\QuestBoard"

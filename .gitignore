@@ -430,3 +430,6 @@ FodyWeavers.xsd
 
 # Steam Workshop upload (local staging, not for git)
 workshop/
+
+# Decompiler dump output (local investigation only)
+tools/DumpQuest/*.txt

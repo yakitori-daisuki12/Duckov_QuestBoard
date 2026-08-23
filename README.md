@@ -4,7 +4,7 @@
 
 NPCに話しかけなくても、既存のクエスト一覧から受注と報告ができます。
 
-出撃中は報告できません。受注は出撃中も可能です。
+出撃中は報告できません（設定で変更可能）。受注は出撃中も可能です。
 
 ![Quest menu screenshot](docs/quest-menu.png)
 
@@ -13,8 +13,26 @@ NPCに話しかけなくても、既存のクエスト一覧から受注と報�
 - クエストメニューから直接受注できます
 - クエストメニューから完了済みクエストを報告できます
 - ボタンの見た目と文言はゲーム本体のNPC画面に寄せています
-- 出撃中は報告を無効化し、受注は可能なままにしています
+- 出撃中は報告を無効化し、受注は可能なままにしています（設定で変更可能）
 - 対応言語は日本語、英語、簡体字中国語、韓国語です
+
+## 設定
+
+mod フォルダ内の `Settings.json` を編集します。
+
+- 場所: `Duckov_Data/Mods/QuestBoard/Settings.json`
+- 初回起動時、`Settings.default.json` から自動生成されます
+- 変更後はゲーム再起動が必要です
+
+```json
+{
+  "allowTurnInDuringRaid": false
+}
+```
+
+| キー | 説明 | デフォルト |
+|---|---|---|
+| `allowTurnInDuringRaid` | 出撃中でもクエスト報告を許可する | `false` |
 
 ## 説明
 
@@ -27,15 +45,33 @@ NPCに話しかけなくても、既存のクエスト一覧から受注と報�
 This is a mod for **Escape from Duckov**.
 
 Accept and turn in quests from the existing quest list without talking to NPCs.
-Turn-in is disabled during raids, while accepting quests still works.
+Turn-in is disabled during raids by default, while accepting quests still works. You can change this in `Settings.json`.
 
 ### Features
 
 - Accept quests directly from the quest menu
 - Turn in finished quests directly from the quest menu
 - Reuse the game's own button look and text style
-- Keep turn-in disabled during raids while still allowing acceptance
+- Keep turn-in disabled during raids while still allowing acceptance (configurable)
 - Support Japanese, English, Simplified Chinese, and Korean
+
+### Settings
+
+Edit `Settings.json` in the mod folder:
+
+- Path: `Duckov_Data/Mods/QuestBoard/Settings.json`
+- Created automatically from `Settings.default.json` on first launch
+- Restart the game after editing
+
+```json
+{
+  "allowTurnInDuringRaid": false
+}
+```
+
+| Key | Description | Default |
+|---|---|---|
+| `allowTurnInDuringRaid` | Allow quest turn-in during raids | `false` |
 
 ## Build
 

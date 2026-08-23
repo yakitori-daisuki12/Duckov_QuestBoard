@@ -22,6 +22,11 @@ public class ModBehaviour : Duckov.Modding.ModBehaviour
         var harmony = new Harmony("com.yakitori.questboard");
         harmony.PatchAll();
         L.Initialize();
-        Log($"Loaded!!! Language: {L.Get(L.Keys.RaidTurnInBlocked)}");
+    }
+
+    protected override void OnAfterSetup()
+    {
+        ModConfig.Load(info.path);
+        Log($"Loaded. allowTurnInDuringRaid={ModConfig.AllowTurnInDuringRaid}");
     }
 }
