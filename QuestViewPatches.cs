@@ -1,13 +1,18 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using Cysharp.Threading.Tasks;
 using Duckov.Quests;
+using Duckov.Quests.Tasks;
 using Duckov.Quests.UI;
+using Duckov.UI;
 using Duckov.Utilities;
 using HarmonyLib;
+using ItemStatsSystem;
 using TMPro;
 using UnityEngine;
+using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 namespace QuestBoard;
@@ -38,6 +43,7 @@ public static class QuestViewPatches
         if (DetailsField?.GetValue(__instance) is QuestViewDetails details)
         {
             AccessTools.Field(typeof(QuestViewDetails), "interactable")?.SetValue(details, interactable);
+            QuestItemHoverForwarder.ScheduleAttach(details);
         }
 
         QuestBoardPanel.Refresh(__instance);
@@ -558,5 +564,569 @@ internal class QuestBoardPanel : MonoBehaviour
     {
         EnsureCompletePanel();
         _completePanel?.Show(quest).Forget();
+    }
+}
+
+[HarmonyPatch(typeof(RewardEntry))]
+public static class RewardEntryPatches
+{
+    private static readonly FieldInfo? RewardIconField =
+        AccessTools.Field(typeof(RewardEntry), "rewardIcon");
+
+    [HarmonyPostfix]
+    [HarmonyPatch("Setup")]
+    public static void Setup(RewardEntry __instance)
+    {
+        QuestItemHoverForwarder.SyncReward(__instance, RewardIconField?.GetValue(__instance) as Image);
+    }
+}
+
+[HarmonyPatch(typeof(TaskEntry))]
+public static class TaskEntryPatches
+{
+    private static readonly FieldInfo? TaskIconField =
+        AccessTools.Field(typeof(TaskEntry), "taskIcon");
+
+    [HarmonyPostfix]
+    [HarmonyPatch("Setup")]
+    public static void Setup(TaskEntry __instance)
+    {
+        QuestItemHoverForwarder.SyncTask(__instance, TaskIconField?.GetValue(__instance) as Image);
+    }
+}
+
+[HarmonyPatch(typeof(QuestRequiredItem))]
+public static class QuestRequiredItemPatches
+{
+    private static readonly FieldInfo? IconField =
+        AccessTools.Field(typeof(QuestRequiredItem), "icon");
+
+    [HarmonyPostfix]
+    [HarmonyPatch(nameof(QuestRequiredItem.Set))]
+    public static void Set(QuestRequiredItem __instance, int itemTypeID)
+    {
+        QuestItemHoverForwarder.SyncRequiredItem(
+            __instance,
+            IconField?.GetValue(__instance) as Image,
+            itemTypeID);
+    }
+}
+
+/// <summary>
+/// 行オブジェクトで Update しつつ、当たり判定はアイコンの画面座標だけを使う。
+/// typeID は表示直前にクエストデータから読み直す。表示自体はゲーム本体の ItemHoveringUI に任せる。
+/// </summary>
+internal class QuestItemHoverForwarder : MonoBehaviour
+{
+    private const string MetaHostName = "QB_HoverMeta";
+    private const string HitPadName = "QB_HoverHit";
+    private const float MinHitSize = 48f;
+
+    private enum SourceKind
+    {
+        None,
+        Task,
+        Reward,
+        RequiredItem
+    }
+
+    private static readonly FieldInfo? MetaDisplayDataField =
+        AccessTools.Field(typeof(ItemMetaDisplay), "data");
+
+    private static readonly FieldInfo? TaskTargetField =
+        AccessTools.Field(typeof(TaskEntry), "target");
+
+    private static readonly FieldInfo? RewardTargetField =
+        AccessTools.Field(typeof(RewardEntry), "target");
+
+    private static readonly FieldInfo? RequiredItemField =
+        AccessTools.Field(typeof(QuestViewDetails), "requiredItem");
+
+    private static readonly FieldInfo? TaskIconField =
+        AccessTools.Field(typeof(TaskEntry), "taskIcon");
+
+    private static readonly FieldInfo? RewardIconField =
+        AccessTools.Field(typeof(RewardEntry), "rewardIcon");
+
+    private static readonly FieldInfo? RequiredIconField =
+        AccessTools.Field(typeof(QuestRequiredItem), "icon");
+
+    private static readonly MethodInfo? SetupAndShowMetaMethod =
+        typeof(ItemHoveringUI)
+            .GetMethods(BindingFlags.Instance | BindingFlags.NonPublic)
+            .FirstOrDefault(m => m.Name == "SetupAndShowMeta" && m.IsGenericMethodDefinition);
+
+    private static readonly MethodInfo? HideMethod =
+        AccessTools.Method(typeof(ItemHoveringUI), "Hide");
+
+    private static readonly MethodInfo? RefreshPositionMethod =
+        AccessTools.Method(typeof(ItemHoveringUI), "RefreshPosition");
+
+    private static readonly FieldInfo? FadeGroupField =
+        AccessTools.Field(typeof(ItemHoveringUI), "fadeGroup");
+
+    private static readonly Vector3[] WorldCorners = new Vector3[4];
+
+    private static int _attachGeneration;
+    private static int _selectFrame = -1;
+    private static QuestItemHoverForwarder? _bestThisFrame;
+    private static float _bestArea = float.MaxValue;
+
+    private SourceKind _kind;
+    private TaskEntry? _taskEntry;
+    private RewardEntry? _rewardEntry;
+    private QuestRequiredItem? _requiredItem;
+    private RectTransform? _hitRect;
+    private ItemMetaDisplay? _metaDisplay;
+    private bool _hovering;
+    private int _shownTypeId = -1;
+
+    public static void ScheduleAttach(QuestViewDetails details)
+    {
+        int generation = ++_attachGeneration;
+        AttachAfterRefresh(details, generation).Forget();
+    }
+
+    private static async UniTaskVoid AttachAfterRefresh(QuestViewDetails details, int generation)
+    {
+        await UniTask.DelayFrame(3);
+        if (details == null || generation != _attachGeneration)
+        {
+            return;
+        }
+
+        // プール済み（非アクティブ）は触らない。アクティブな行だけ同期する。
+        foreach (TaskEntry entry in details.GetComponentsInChildren<TaskEntry>(false))
+        {
+            SyncTask(entry, TaskIconField?.GetValue(entry) as Image);
+        }
+
+        foreach (RewardEntry entry in details.GetComponentsInChildren<RewardEntry>(false))
+        {
+            SyncReward(entry, RewardIconField?.GetValue(entry) as Image);
+        }
+
+        if (RequiredItemField?.GetValue(details) is QuestRequiredItem required)
+        {
+            int typeID = details.Target != null ? details.Target.RequiredItemID : 0;
+            SyncRequiredItem(required, RequiredIconField?.GetValue(required) as Image, typeID);
+        }
+    }
+
+    public static void SyncTask(TaskEntry entry, Image? icon)
+    {
+        if (entry == null)
+        {
+            return;
+        }
+
+        CleanupOldBindings(entry.gameObject, icon);
+        int typeID = TaskTargetField?.GetValue(entry) is SubmitItems submit ? submit.ItemTypeID : 0;
+        QuestItemHoverForwarder hover = GetOrAdd(entry.gameObject);
+        if (typeID <= 0 || icon == null || !icon.gameObject.activeSelf)
+        {
+            hover.Shutdown();
+            return;
+        }
+
+        hover.Configure(SourceKind.Task, EnsureHitPad(icon), entry, null, null);
+    }
+
+    public static void SyncReward(RewardEntry entry, Image? icon)
+    {
+        if (entry == null)
+        {
+            return;
+        }
+
+        CleanupOldBindings(entry.gameObject, icon);
+        int typeID = GetItemTypeId(RewardTargetField?.GetValue(entry));
+        QuestItemHoverForwarder hover = GetOrAdd(entry.gameObject);
+        if (typeID <= 0 || icon == null || !icon.gameObject.activeSelf)
+        {
+            hover.Shutdown();
+            return;
+        }
+
+        hover.Configure(SourceKind.Reward, EnsureHitPad(icon), null, entry, null);
+    }
+
+    public static void SyncRequiredItem(QuestRequiredItem required, Image? icon, int itemTypeID)
+    {
+        if (required == null)
+        {
+            return;
+        }
+
+        CleanupOldBindings(required.gameObject, icon);
+        QuestItemHoverForwarder hover = GetOrAdd(required.gameObject);
+        if (itemTypeID <= 0 || icon == null || !required.gameObject.activeInHierarchy)
+        {
+            hover.Shutdown();
+            return;
+        }
+
+        // 必要アイテムの Image が非アクティブでも、親が有効ならヒットパッドを付ける
+        icon.gameObject.SetActive(true);
+        hover.Configure(SourceKind.RequiredItem, EnsureHitPad(icon), null, null, required);
+    }
+
+    private static QuestItemHoverForwarder GetOrAdd(GameObject host)
+    {
+        return host.GetComponent<QuestItemHoverForwarder>()
+            ?? host.AddComponent<QuestItemHoverForwarder>();
+    }
+
+    private static RectTransform EnsureHitPad(Image icon)
+    {
+        Transform? existing = icon.transform.Find(HitPadName);
+        GameObject padGo;
+        if (existing != null)
+        {
+            padGo = existing.gameObject;
+        }
+        else
+        {
+            padGo = new GameObject(HitPadName, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+            padGo.transform.SetParent(icon.transform, false);
+        }
+
+        RectTransform rt = padGo.GetComponent<RectTransform>();
+        rt.anchorMin = new Vector2(0.5f, 0.5f);
+        rt.anchorMax = new Vector2(0.5f, 0.5f);
+        rt.pivot = new Vector2(0.5f, 0.5f);
+        rt.anchoredPosition = Vector2.zero;
+        rt.sizeDelta = new Vector2(MinHitSize, MinHitSize);
+
+        Image padImage = padGo.GetComponent<Image>();
+        padImage.color = new Color(1f, 1f, 1f, 0f);
+        padImage.raycastTarget = false;
+        padGo.SetActive(true);
+        return rt;
+    }
+
+    // 以前アイコン側に付けていたコンポーネントを外し、本体のポインターイベントが誤発火しないようにする
+    private static void CleanupOldBindings(GameObject root, Image? icon)
+    {
+        if (icon != null && icon.gameObject != root)
+        {
+            foreach (QuestItemHoverForwarder hover in icon.GetComponents<QuestItemHoverForwarder>())
+            {
+                hover.Shutdown();
+                UnityEngine.Object.Destroy(hover);
+            }
+
+            foreach (ItemMetaDisplay meta in icon.GetComponents<ItemMetaDisplay>())
+            {
+                UnityEngine.Object.Destroy(meta);
+            }
+        }
+
+        foreach (ItemMetaDisplay meta in root.GetComponents<ItemMetaDisplay>())
+        {
+            UnityEngine.Object.Destroy(meta);
+        }
+    }
+
+    private void Configure(
+        SourceKind kind,
+        RectTransform hitRect,
+        TaskEntry? task,
+        RewardEntry? reward,
+        QuestRequiredItem? required)
+    {
+        _kind = kind;
+        _hitRect = hitRect;
+        _taskEntry = task;
+        _rewardEntry = reward;
+        _requiredItem = required;
+        _metaDisplay = EnsureMetaHost();
+        _shownTypeId = -1;
+        enabled = true;
+    }
+
+    private ItemMetaDisplay EnsureMetaHost()
+    {
+        Transform? existing = transform.Find(MetaHostName);
+        GameObject host;
+        if (existing != null)
+        {
+            host = existing.gameObject;
+        }
+        else
+        {
+            host = new GameObject(MetaHostName, typeof(RectTransform));
+            host.transform.SetParent(transform, false);
+        }
+
+        host.SetActive(true);
+        return host.GetComponent<ItemMetaDisplay>() ?? host.AddComponent<ItemMetaDisplay>();
+    }
+
+    public static int GetItemTypeId(object? source)
+    {
+        if (source == null)
+        {
+            return 0;
+        }
+
+        foreach (string fieldName in new[] { "itemTypeID", "unlockItem" })
+        {
+            FieldInfo? field = AccessTools.Field(source.GetType(), fieldName);
+            if (field?.GetValue(source) is int value && value > 0)
+            {
+                return value;
+            }
+        }
+
+        foreach (string propertyName in new[] { "ItemTypeID", "UnlockItem" })
+        {
+            PropertyInfo? property = AccessTools.Property(source.GetType(), propertyName);
+            if (property?.GetValue(source) is int value && value > 0)
+            {
+                return value;
+            }
+        }
+
+        return 0;
+    }
+
+    private int ResolveTypeId()
+    {
+        switch (_kind)
+        {
+            case SourceKind.Task:
+                return _taskEntry != null &&
+                       TaskTargetField?.GetValue(_taskEntry) is SubmitItems submit
+                    ? submit.ItemTypeID
+                    : 0;
+
+            case SourceKind.Reward:
+                return _rewardEntry != null
+                    ? GetItemTypeId(RewardTargetField?.GetValue(_rewardEntry))
+                    : 0;
+
+            case SourceKind.RequiredItem:
+                if (_requiredItem == null)
+                {
+                    return 0;
+                }
+
+                QuestViewDetails? details = _requiredItem.GetComponentInParent<QuestViewDetails>();
+                return details?.Target != null ? details.Target.RequiredItemID : 0;
+
+            default:
+                return 0;
+        }
+    }
+
+    private void Shutdown()
+    {
+        if (_hovering)
+        {
+            _hovering = false;
+            HideHover();
+        }
+
+        _kind = SourceKind.None;
+        _taskEntry = null;
+        _rewardEntry = null;
+        _requiredItem = null;
+        _hitRect = null;
+        _shownTypeId = -1;
+        enabled = false;
+    }
+
+    private void OnDisable()
+    {
+        if (_hovering)
+        {
+            _hovering = false;
+            _shownTypeId = -1;
+            HideHover();
+        }
+    }
+
+    private void Update()
+    {
+        if (_selectFrame != Time.frameCount)
+        {
+            _selectFrame = Time.frameCount;
+            _bestThisFrame = null;
+            _bestArea = float.MaxValue;
+        }
+
+        if (Mouse.current == null || !isActiveAndEnabled || _kind == SourceKind.None || _hitRect == null)
+        {
+            return;
+        }
+
+        if (ResolveTypeId() <= 0)
+        {
+            return;
+        }
+
+        Vector2 mouse = Mouse.current.position.value;
+        if (!TryGetScreenHitRect(_hitRect, out Rect screenRect))
+        {
+            return;
+        }
+
+        if (!screenRect.Contains(mouse))
+        {
+            return;
+        }
+
+        float area = screenRect.width * screenRect.height;
+        if (area < _bestArea)
+        {
+            _bestArea = area;
+            _bestThisFrame = this;
+        }
+    }
+
+    // Canvas のカメラ設定に依存しにくいよう、ワールド角→画面座標で判定する
+    private static bool TryGetScreenHitRect(RectTransform rect, out Rect screenRect)
+    {
+        screenRect = default;
+        if (rect == null)
+        {
+            return false;
+        }
+
+        Canvas? canvas = rect.GetComponentInParent<Canvas>()?.rootCanvas;
+        Camera? camera = null;
+        if (canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay)
+        {
+            camera = canvas.worldCamera != null ? canvas.worldCamera : Camera.main;
+        }
+
+        rect.GetWorldCorners(WorldCorners);
+        Vector2 min = RectTransformUtility.WorldToScreenPoint(camera, WorldCorners[0]);
+        Vector2 max = min;
+        for (int i = 1; i < 4; i++)
+        {
+            Vector2 p = RectTransformUtility.WorldToScreenPoint(camera, WorldCorners[i]);
+            min = Vector2.Min(min, p);
+            max = Vector2.Max(max, p);
+        }
+
+        float width = Mathf.Max(MinHitSize, max.x - min.x);
+        float height = Mathf.Max(MinHitSize, max.y - min.y);
+        float cx = (min.x + max.x) * 0.5f;
+        float cy = (min.y + max.y) * 0.5f;
+        screenRect = new Rect(cx - width * 0.5f, cy - height * 0.5f, width, height);
+        return true;
+    }
+
+    private void LateUpdate()
+    {
+        if (_bestThisFrame == this && isActiveAndEnabled)
+        {
+            int typeID = ResolveTypeId();
+            if (typeID <= 0)
+            {
+                if (_hovering)
+                {
+                    _hovering = false;
+                    _shownTypeId = -1;
+                    HideHover();
+                }
+
+                return;
+            }
+
+            // 毎フレーム呼ぶと DuckovFishingInfo の Postfix 例外で LateUpdate が壊れるため、進入時だけ
+            if (!_hovering || _shownTypeId != typeID)
+            {
+                _hovering = true;
+                _shownTypeId = typeID;
+                ShowHover();
+            }
+
+            return;
+        }
+
+        if (_hovering)
+        {
+            _hovering = false;
+            _shownTypeId = -1;
+            HideHover();
+        }
+    }
+
+    private void ShowHover()
+    {
+        int typeID = ResolveTypeId();
+        if (typeID <= 0 || SetupAndShowMetaMethod == null)
+        {
+            return;
+        }
+
+        ItemHoveringUI? hoverUi = ItemHoveringUI.Instance
+            ?? Resources.FindObjectsOfTypeAll<ItemHoveringUI>().FirstOrDefault(ui => ui != null);
+        if (hoverUi == null)
+        {
+            return;
+        }
+
+        ItemMetaData meta = ItemAssetsCollection.GetMetaData(typeID);
+        if (meta.id <= 0)
+        {
+            return;
+        }
+
+        if (!hoverUi.gameObject.activeSelf)
+        {
+            hoverUi.gameObject.SetActive(true);
+        }
+
+        // クエストUIより手前に出す
+        Canvas? canvas = hoverUi.GetComponentInParent<Canvas>();
+        if (canvas != null)
+        {
+            canvas.overrideSorting = true;
+            if (canvas.sortingOrder < 5000)
+            {
+                canvas.sortingOrder = 5000;
+            }
+        }
+
+        _metaDisplay ??= EnsureMetaHost();
+        _metaDisplay.gameObject.SetActive(true);
+        MetaDisplayDataField?.SetValue(_metaDisplay, meta);
+
+        try
+        {
+            SetupAndShowMetaMethod
+                .MakeGenericMethod(typeof(ItemMetaDisplay))
+                .Invoke(hoverUi, new object[] { _metaDisplay });
+        }
+        catch (TargetInvocationException)
+        {
+            // DuckovFishingInfo が非魚アイテムで Postfix 例外を投げる。本体の表示処理は完了済み。
+        }
+        catch (Exception ex)
+        {
+            ModBehaviour.LogError($"Hover show failed: {ex.Message}");
+            return;
+        }
+
+        // 例外後でも表示を確定させる
+        RefreshPositionMethod?.Invoke(hoverUi, null);
+        object? fadeGroup = FadeGroupField?.GetValue(hoverUi);
+        if (fadeGroup != null)
+        {
+            AccessTools.Method(fadeGroup.GetType(), "Show")?.Invoke(fadeGroup, null);
+        }
+    }
+
+    private void HideHover()
+    {
+        ItemHoveringUI? hoverUi = ItemHoveringUI.Instance;
+        if (hoverUi != null)
+        {
+            HideMethod?.Invoke(hoverUi, null);
+        }
     }
 }
