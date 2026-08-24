@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reflection;
 using Cysharp.Threading.Tasks;
 using Duckov.Quests;
+using Duckov.Quests.Rewards;
 using Duckov.Quests.Tasks;
 using Duckov.Quests.UI;
 using Duckov.UI;
@@ -620,7 +621,8 @@ internal class QuestItemHoverForwarder : MonoBehaviour
 {
     private const string MetaHostName = "QB_HoverMeta";
     private const string HitPadName = "QB_HoverHit";
-    private const float MinHitSize = 48f;
+    // 行間より小さくして、隣の報酬アイコンとパッドが重ならないようにする
+    private const float MinHitSize = 32f;
 
     private enum SourceKind
     {
@@ -665,12 +667,18 @@ internal class QuestItemHoverForwarder : MonoBehaviour
     private static readonly FieldInfo? FadeGroupField =
         AccessTools.Field(typeof(ItemHoveringUI), "fadeGroup");
 
+    private static readonly FieldInfo? WeightDisplayField =
+        AccessTools.Field(typeof(ItemHoveringUI), "weightDisplay");
+
+    private static readonly FieldInfo? ItemIdField =
+        AccessTools.Field(typeof(ItemHoveringUI), "itemID");
+
     private static readonly Vector3[] WorldCorners = new Vector3[4];
 
     private static int _attachGeneration;
     private static int _selectFrame = -1;
     private static QuestItemHoverForwarder? _bestThisFrame;
-    private static float _bestArea = float.MaxValue;
+    private static float _bestDistSq = float.MaxValue;
 
     private SourceKind _kind;
     private TaskEntry? _taskEntry;
@@ -742,12 +750,14 @@ internal class QuestItemHoverForwarder : MonoBehaviour
         CleanupOldBindings(entry.gameObject, icon);
         int typeID = GetItemTypeId(RewardTargetField?.GetValue(entry));
         QuestItemHoverForwarder hover = GetOrAdd(entry.gameObject);
-        if (typeID <= 0 || icon == null || !icon.gameObject.activeSelf)
+        if (typeID <= 0 || icon == null)
         {
             hover.Shutdown();
             return;
         }
 
+        // 報酬アイコンが非表示扱いになっていても、表示中なら強制的にホバー対象にする
+        icon.gameObject.SetActive(true);
         hover.Configure(SourceKind.Reward, EnsureHitPad(icon), null, entry, null);
     }
 
@@ -870,6 +880,16 @@ internal class QuestItemHoverForwarder : MonoBehaviour
             return 0;
         }
 
+        if (source is RewardItem rewardItem && rewardItem.itemTypeID > 0)
+        {
+            return rewardItem.itemTypeID;
+        }
+
+        if (source is QuestReward_UnlockStockItem unlock && unlock.UnlockItem > 0)
+        {
+            return unlock.UnlockItem;
+        }
+
         foreach (string fieldName in new[] { "itemTypeID", "unlockItem" })
         {
             FieldInfo? field = AccessTools.Field(source.GetType(), fieldName);
@@ -953,7 +973,7 @@ internal class QuestItemHoverForwarder : MonoBehaviour
         {
             _selectFrame = Time.frameCount;
             _bestThisFrame = null;
-            _bestArea = float.MaxValue;
+            _bestDistSq = float.MaxValue;
         }
 
         if (Mouse.current == null || !isActiveAndEnabled || _kind == SourceKind.None || _hitRect == null)
@@ -977,10 +997,11 @@ internal class QuestItemHoverForwarder : MonoBehaviour
             return;
         }
 
-        float area = screenRect.width * screenRect.height;
-        if (area < _bestArea)
+        // 隣の行とパッドが重なっても、マウスに近いアイコンを優先する
+        float distSq = (screenRect.center - mouse).sqrMagnitude;
+        if (distSq < _bestDistSq)
         {
-            _bestArea = area;
+            _bestDistSq = distSq;
             _bestThisFrame = this;
         }
     }
@@ -1119,6 +1140,59 @@ internal class QuestItemHoverForwarder : MonoBehaviour
         {
             AccessTools.Method(fadeGroup.GetType(), "Show")?.Invoke(fadeGroup, null);
         }
+
+        // SetupAndShowMeta は # なし・重量なし。値段は説明文に足さず重量欄へ（釣れる条件MODと競合しない）
+        ApplyInventoryStyleExtras(hoverUi, typeID, meta);
+    }
+
+    private static void ApplyInventoryStyleExtras(ItemHoveringUI hoverUi, int typeID, ItemMetaData meta)
+    {
+        // インベントリと同じく "#22"
+        if (ItemIdField?.GetValue(hoverUi) is TMP_Text itemId)
+        {
+            itemId.text = $"#{typeID}";
+        }
+
+        float weight = 0f;
+        int price = 0;
+        Item? prefab = ItemAssetsCollection.GetPrefab(typeID);
+        if (prefab != null)
+        {
+            weight = prefab.UnitSelfWeight;
+            price = ResolveInventoryStylePrice(prefab);
+        }
+
+        if (price <= 0)
+        {
+            price = Mathf.FloorToInt(meta.priceEach * DefaultSellFactor);
+        }
+
+        if (WeightDisplayField?.GetValue(hoverUi) is TMP_Text weightDisplay)
+        {
+            weightDisplay.gameObject.SetActive(true);
+            // 説明文は DuckovFishingInfo が使うので、値段はここに出して位置ずれを防ぐ
+            weightDisplay.text = price > 0
+                ? $"{weight:0.#} kg\n${price}"
+                : $"{weight:0.#} kg";
+        }
+    }
+
+    // InventoryEntryTradingPriceDisplay / StockShop.ConvertPrice(selling) と同じ考え方
+    private const float DefaultSellFactor = 0.5f;
+
+    private static int ResolveInventoryStylePrice(Item item)
+    {
+        if (item == null)
+        {
+            return 0;
+        }
+
+        if (TradingUIUtilities.ActiveMerchant != null)
+        {
+            return TradingUIUtilities.ActiveMerchant.ConvertPrice(item, selling: true);
+        }
+
+        return Mathf.FloorToInt(item.GetTotalRawValue() * DefaultSellFactor);
     }
 
     private void HideHover()
