@@ -673,6 +673,9 @@ internal class QuestItemHoverForwarder : MonoBehaviour
     private static readonly FieldInfo? ItemIdField =
         AccessTools.Field(typeof(ItemHoveringUI), "itemID");
 
+    private static readonly FieldInfo? ItemDescriptionField =
+        AccessTools.Field(typeof(ItemHoveringUI), "itemDescription");
+
     private static readonly Vector3[] WorldCorners = new Vector3[4];
 
     private static int _attachGeneration;
@@ -1141,8 +1144,9 @@ internal class QuestItemHoverForwarder : MonoBehaviour
             AccessTools.Method(fadeGroup.GetType(), "Show")?.Invoke(fadeGroup, null);
         }
 
-        // SetupAndShowMeta は # なし・重量なし。値段は説明文に足さず重量欄へ（釣れる条件MODと競合しない）
+        // SetupAndShowMeta は # なし・重量なし。値段は釣れる条件の後に回してインベントリと同じ並びにする
         ApplyInventoryStyleExtras(hoverUi, typeID, meta);
+        AppendPriceAfterOtherMods(hoverUi, typeID, meta).Forget();
     }
 
     private static void ApplyInventoryStyleExtras(ItemHoveringUI hoverUi, int typeID, ItemMetaData meta)
@@ -1154,11 +1158,37 @@ internal class QuestItemHoverForwarder : MonoBehaviour
         }
 
         float weight = 0f;
-        int price = 0;
         Item? prefab = ItemAssetsCollection.GetPrefab(typeID);
         if (prefab != null)
         {
             weight = prefab.UnitSelfWeight;
+        }
+
+        if (WeightDisplayField?.GetValue(hoverUi) is TMP_Text weightDisplay)
+        {
+            weightDisplay.gameObject.SetActive(true);
+            weightDisplay.text = $"{weight:0.#} kg";
+        }
+    }
+
+    // DuckovFishingInfo が説明文へ追記したあとに、末尾へ $ を付けて左揃えを説明文に合わせる
+    private async UniTaskVoid AppendPriceAfterOtherMods(ItemHoveringUI hoverUi, int typeID, ItemMetaData meta)
+    {
+        await UniTask.DelayFrame(2);
+        if (hoverUi == null || !_hovering || _shownTypeId != typeID)
+        {
+            return;
+        }
+
+        if (ItemDescriptionField?.GetValue(hoverUi) is not TMP_Text description)
+        {
+            return;
+        }
+
+        int price = 0;
+        Item? prefab = ItemAssetsCollection.GetPrefab(typeID);
+        if (prefab != null)
+        {
             price = ResolveInventoryStylePrice(prefab);
         }
 
@@ -1167,14 +1197,28 @@ internal class QuestItemHoverForwarder : MonoBehaviour
             price = Mathf.FloorToInt(meta.priceEach * DefaultSellFactor);
         }
 
-        if (WeightDisplayField?.GetValue(hoverUi) is TMP_Text weightDisplay)
+        if (price <= 0)
         {
-            weightDisplay.gameObject.SetActive(true);
-            // 説明文は DuckovFishingInfo が使うので、値段はここに出して位置ずれを防ぐ
-            weightDisplay.text = price > 0
-                ? $"{weight:0.#} kg\n${price}"
-                : $"{weight:0.#} kg";
+            return;
         }
+
+        string priceLine = $"${price}";
+        string text = description.text ?? string.Empty;
+        if (text.IndexOf(priceLine, StringComparison.Ordinal) >= 0)
+        {
+            return;
+        }
+
+        // 末尾の空行を整理してから、空行1つ空けて値段を付ける
+        text = text.TrimEnd('\r', '\n', ' ', '\u200b', '\u2063');
+        description.text = string.IsNullOrEmpty(text) ? priceLine : $"{text}\n\n{priceLine}";
+
+        if (description.transform is RectTransform rect)
+        {
+            LayoutRebuilder.ForceRebuildLayoutImmediate(rect);
+        }
+
+        RefreshPositionMethod?.Invoke(hoverUi, null);
     }
 
     // InventoryEntryTradingPriceDisplay / StockShop.ConvertPrice(selling) と同じ考え方
