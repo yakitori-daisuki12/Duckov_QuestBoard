@@ -18,6 +18,9 @@ public static class QuestViewPatches
     private static readonly FieldInfo? DetailsField =
         AccessTools.Field(typeof(QuestView), "details");
 
+    private static readonly MethodInfo? SetEverInspectedMethod =
+        AccessTools.Method(typeof(QuestManager), "SetEverInspected", new[] { typeof(int) });
+
     [HarmonyPostfix]
     [HarmonyPatch("OnOpen")]
     public static void OnOpen(QuestView __instance)
@@ -44,6 +47,12 @@ public static class QuestViewPatches
     [HarmonyPatch(nameof(QuestView.SetSelection))]
     public static void SetSelection(QuestView __instance)
     {
+        Quest? quest = __instance.SelectedQuest;
+        if (quest != null)
+        {
+            SetEverInspectedMethod?.Invoke(null, new object[] { quest.ID });
+        }
+
         QuestBoardPanel.Refresh(__instance);
     }
 

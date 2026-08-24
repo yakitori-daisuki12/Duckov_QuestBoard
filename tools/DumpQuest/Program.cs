@@ -1,19 +1,37 @@
 using System;
+using System.Linq;
+using System.Reflection;
 using ICSharpCode.Decompiler;
 using ICSharpCode.Decompiler.CSharp;
+using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.Decompiler.TypeSystem;
 
 var path = @"D:\Steam\steamapps\common\Escape from Duckov\Duckov_Data\Managed\TeamSoda.Duckov.Core.dll";
-var d = new CSharpDecompiler(path, new DecompilerSettings { ThrowOnAssemblyResolveErrors = false });
+var module = new PEFile(path);
+var settings = new DecompilerSettings { ThrowOnAssemblyResolveErrors = false };
+var d = new CSharpDecompiler(path, settings);
 
-var mgr = d.DecompileTypeAsString(new FullTypeName("Duckov.Modding.ModManager"));
-foreach (string key in new[] { "displayName", "TryProcessModFolder", "SteamWorkshop", "GetItem" })
+foreach (var t in d.TypeSystem.GetAllTypeDefinitions().Where(t => t.FullName.Contains("Duckov.Quests")))
 {
-    int idx = mgr.IndexOf(key, StringComparison.Ordinal);
-    Console.WriteLine($"===== {key} @ {idx} =====");
-    if (idx >= 0)
+    string src;
+    try { src = d.DecompileTypeAsString(t.FullTypeName); }
+    catch { continue; }
+    if (src.Contains("SetEverInspected"))
     {
-        int start = Math.Max(0, idx - 300);
-        Console.WriteLine(mgr.Substring(start, Math.Min(3500, mgr.Length - start)));
+        Console.WriteLine($"FOUND in {t.FullName}");
+        int p = 0;
+        int n = 0;
+        while ((p = src.IndexOf("SetEverInspected", p, StringComparison.Ordinal)) >= 0 && n < 5)
+        {
+            Console.WriteLine(src.Substring(Math.Max(0, p - 200), Math.Min(500, src.Length - Math.Max(0, p - 200))));
+            Console.WriteLine("====");
+            p += 16;
+            n++;
+        }
     }
 }
+
+Console.WriteLine("----- ActivateQuest snippet -----");
+string mgr = d.DecompileTypeAsString(new FullTypeName("Duckov.Quests.QuestManager"));
+int a = mgr.IndexOf("ActivateQuest", StringComparison.Ordinal);
+Console.WriteLine(mgr.Substring(a, Math.Min(2500, mgr.Length - a)));
